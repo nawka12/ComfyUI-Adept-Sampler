@@ -10,15 +10,15 @@ Advanced custom samplers and schedulers for ComfyUI, ported from the Stable Diff
 
 | Sampler | Description |
 |---------|-------------|
-| **Adept Solver** | Multistep predictor-corrector combining DPM-Solver++, UniPC, DEIS, and DC-Solver techniques |
-| **Adept Ancestral Solver** | Phase-aware ancestral sampling with adaptive eta and enhanced derivatives |
-| **AkashicSolver v2** | SA-Solver optimized for EQ-VAE models with tau control and SMEA coherency |
+| **Adept Solver** | Hybrid **Predictor-Corrector** pipeline using Adams-Bashforth integration (DEIS) with UniPC correction steps and dynamic thresholding |
+| **Adept Ancestral Solver** | **Enhanced Euler Ancestral** with phase-dependent step sizing, adaptive noise injection (Eta), and context-aware derivative corrections |
+| **AkashicSolver v2** | **SA-Solver** (Stochastic Adams) implementation integrated with **SMEA** (Sinusoidal Multipass) interpolation for high-res coherence |
 
 ### Schedulers (17+)
 
 | Category | Schedulers |
 |----------|-----------|
-| **Anime-Optimized** | AOS-V (v-prediction), AOS-ε (epsilon), AkashicAOS (EQ-VAE) |
+| **Anime-Optimized** | AOS-V (v-prediction), AOS-ε (epsilon), AkashicAOS (Continuous Power-Function) |
 | **Research-Based** | AYS-SDXL (Align Your Steps), JYS (Jump Your Steps), SNR-Optimized |
 | **General Purpose** | Entropic, Cosine-Annealed, LogSNR-Uniform, Constant-Rate |
 | **Experimental** | Stochastic, Jittered-Karras, Tanh Mid-Boost, Exponential Tail |
@@ -85,7 +85,7 @@ All sampler nodes output `SAMPLER` for use with SamplerCustom.
 |------|----------------|
 | **Adept Solver Sampler** | order (1-3), use_corrector, detail enhancement options |
 | **Adept Ancestral Sampler** | eta, s_noise, adaptive_eta, phase_noise, enhanced_derivative |
-| **AkashicSolver v2** | tau (0-1), eta, s_noise, order, adaptive_eta, smea_strength, ndb_strength |
+| **AkashicSolver v2** | tau (0-1), eta, s_noise, order, adaptive_eta, smea_strength, ndb_strength (High-Frequency Injection) |
 
 ## Recommended Settings
 
@@ -99,7 +99,7 @@ All sampler nodes output `SAMPLER` for use with SamplerCustom.
 
 ### For EQ-VAE models (e.g., AkashicPulse)
 - Scheduler: **AkashicAOS**
-- Sampler: **AkashicSolver v2** (tau=0.5, order=2)
+- Sampler: **AkashicSolver v2** (tau=0.5, order=2) - *Uses SA-Solver to manage stochasticity in smooth latent spaces*
 - **Important**: Use external rescaleCFG (0.7) for best results
 
 ## Credits
@@ -109,4 +109,18 @@ Ported to ComfyUI as custom nodes.
 
 ## License
 
-MIT License
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+
+### License Summary
+
+**Permitted:** Commercial use, Modification, Distribution, Patent use, Private use
+
+**Requirements:** License and copyright notice, State changes, Disclose source, Same license
+
+**Limitations:** No Liability or Warranty
+
+### Why GPL-3.0?
+
+This license ensures compatibility with Stable Diffusion WebUI reForge and its ecosystem, while protecting the open-source nature of the project.
+
+Full license text: https://www.gnu.org/licenses/gpl-3.0.html
