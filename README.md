@@ -2,6 +2,8 @@
 
 Advanced custom samplers and schedulers for ComfyUI, ported from the Stable Diffusion WebUI reForge extension.
 
+> **Also available for SD WebUI reForge:** [nawka12/adept-sampler](https://github.com/nawka12/adept-sampler)
+
 ## Features
 
 ### Samplers (3)
