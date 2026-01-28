@@ -11,6 +11,9 @@ from .utils import (
     apply_dynamic_thresholding,
     compute_compensation_ratio,
     compute_tau_eqvae,
+    compute_eqvae_tau,
+    compute_eqvae_noise_scale,
+    compute_eqvae_ndb,
     compute_smea_factor,
     sa_solver_step,
     get_ancestral_step,
@@ -292,28 +295,43 @@ def sample_adept_ancestral_solver(model, x, sigmas, extra_args=None, callback=No
 
 def sample_akashic_solver(model, x, sigmas, extra_args=None, callback=None, disable=None,
                            tau=0.5, eta=1.0, s_noise=1.0, adaptive_eta=True, phase_strength=0.5,
-                           order=2, smea_strength=0.0, ndb_strength=0.0, 
-                           use_detail_enhancement=False, settings=None):
+                           order=2, smea_strength=0.0, ndb_strength=0.0,
+                           use_detail_enhancement=False, settings=None, eqvae_mode='Off'):
     """
     AkashicSolver v2 [EXPERIMENTAL]: Advanced sampler optimized for EQ-VAE models.
-    
+
     Combines:
     1. SA-SOLVER BASE: Multi-step Adams-Bashforth integration with tau function
     2. PHASE-AWARE SAMPLING: Three-phase approach with adaptive parameters
     3. SMEA COHERENCY: Sine-based interpolation for high-resolution coherency
+
+    Args:
+        eqvae_mode: EQ-VAE optimization mode ('Off' or 'Balanced')
     """
     extra_args = {} if extra_args is None else extra_args
     settings = settings or {}
     s_in = x.new_ones([x.shape[0]])
-    
-    print(f"🌀 AkashicSolver v2 [EXPERIMENTAL] active")
+
+    # Parse EQ-VAE mode setting
+    if isinstance(eqvae_mode, bool):
+        # Backwards compatibility with old boolean setting
+        eqvae_enabled = eqvae_mode
+    else:
+        eqvae_enabled = eqvae_mode == 'Balanced'
+
+    if eqvae_enabled:
+        print(f"🌀 AkashicSolver v2 [EQ-VAE BALANCED] active")
+        print(f"   Optimized for EQ-VAE's cleaner latent space")
+    else:
+        print(f"🌀 AkashicSolver v2 [EXPERIMENTAL] active")
     print(f"   τ (tau): {tau:.2f}, η (eta): {eta:.2f}, s_noise: {s_noise:.2f}")
     print(f"   Order: {order}, Adaptive Eta: {adaptive_eta}, Phase Strength: {phase_strength:.2f}")
     if smea_strength > 0:
         print(f"   SMEA: {smea_strength:.2f} (high-res coherency)")
     if ndb_strength > 0:
-        print(f"   Native Detail Boost: {ndb_strength:.2f}")
-    print(f"   ⚠️ Use external rescaleCFG (e.g., 0.7) for EQ-VAE models")
+        print(f"   Native Detail Boost: {ndb_strength:.2f} (detail enhancement)")
+    if not eqvae_enabled:
+        print(f"   ⚠️ Use external rescaleCFG (e.g., 0.7) for EQ-VAE models")
     
     # Apply detail enhancement wrapper if enabled
     active_model = model
@@ -331,20 +349,38 @@ def sample_akashic_solver(model, x, sigmas, extra_args=None, callback=None, disa
         
         progress = i / max(total_steps - 1, 1)
         
-        # === PHASE-AWARE TAU ===
+        # === COMPUTE PHASE-AWARE TAU ===
+        # Tau controls stochasticity: 0=ODE (deterministic), 1=full SDE (stochastic)
         if adaptive_eta:
-            current_tau = compute_tau_eqvae(progress, tau, phase_strength)
+            if eqvae_enabled:
+                # EQ-VAE optimized: shifted phase boundaries, reduced stochasticity
+                current_tau = compute_eqvae_tau(progress, tau, phase_strength)
+            else:
+                current_tau = compute_tau_eqvae(progress, tau, phase_strength)
         else:
             current_tau = tau
-        
+
         # === PHASE-AWARE ADAPTIVE ETA ===
+        # Eta affects the ancestral noise magnitude within the stochastic component
         if adaptive_eta:
-            if progress < 0.30:
-                current_eta = eta * (1.0 + 0.08 * phase_strength)
-            elif progress < 0.60:
-                current_eta = eta * (1.0 - 0.05 * phase_strength)
+            if eqvae_enabled:
+                # EQ-VAE Balanced: gentler curve to maintain sharpness
+                if progress < 0.25:
+                    current_eta = eta * (1.0 + 0.03 * phase_strength)
+                elif progress < 0.55:
+                    current_eta = eta * (1.0 - 0.03 * phase_strength)
+                else:
+                    current_eta = eta * (1.0 + 0.02 * phase_strength)
             else:
-                current_eta = eta * (1.0 + 0.02 * phase_strength)
+                if progress < 0.30:
+                    # Foundation phase: slightly higher eta for composition diversity
+                    current_eta = eta * (1.0 + 0.08 * phase_strength)
+                elif progress < 0.60:
+                    # Structure phase: conservative eta for stable structure formation
+                    current_eta = eta * (1.0 - 0.05 * phase_strength)
+                else:
+                    # Refinement phase: slight eta boost for detail variation
+                    current_eta = eta * (1.0 + 0.02 * phase_strength)
         else:
             current_eta = eta
         
@@ -372,20 +408,38 @@ def sample_akashic_solver(model, x, sigmas, extra_args=None, callback=None, disa
         if len(d_history) > order:
             d_history.pop(0)
         
-        # === SA-SOLVER STEP ===
-        effective_tau = current_tau
-        effective_s_noise = s_noise * current_eta * smea_factor
-        
-        # Phase-aware noise adjustment
-        if progress < 0.30:
-            noise_multiplier = 1.0 + 0.03 * phase_strength
-        elif progress < 0.60:
-            noise_multiplier = 1.0 - 0.01 * phase_strength
+        # === SA-SOLVER STEP WITH TAU CONTROL ===
+        # tau controls stochasticity (how much noise injection)
+        # eta controls noise magnitude within the stochastic component
+        # These should be independent, not multiplied together
+        effective_tau = current_tau  # Use tau directly for stochasticity control
+
+        if eqvae_enabled:
+            # EQ-VAE optimized: reduced noise for cleaner latent space
+            effective_s_noise = compute_eqvae_noise_scale(s_noise * current_eta, progress) * smea_factor
         else:
-            noise_multiplier = 1.0 - 0.02 * phase_strength
-        
-        effective_s_noise *= noise_multiplier
-        
+            effective_s_noise = s_noise * current_eta * smea_factor  # eta affects noise magnitude
+
+            # Phase-aware noise adjustment (more conservative to preserve sharpness)
+            if progress < 0.30:
+                # Foundation: subtle increase for diversity
+                noise_multiplier = 1.0 + 0.03 * phase_strength  # Reduced from 0.05
+            elif progress < 0.60:
+                # Structure: very slight reduction for stability
+                noise_multiplier = 1.0 - 0.01 * phase_strength  # Reduced from 0.02
+            else:
+                # Refinement: minimal reduction to preserve detail sharpness
+                noise_multiplier = 1.0 - 0.02 * phase_strength  # Reduced from 0.05
+
+            effective_s_noise *= noise_multiplier
+
+        # Determine NDB parameters (EQ-VAE uses different blur sigma)
+        if eqvae_enabled and ndb_strength > 0:
+            eqvae_blur_sigma, _ = compute_eqvae_ndb(progress, ndb_strength)
+        else:
+            eqvae_blur_sigma = None
+
+        # Execute SA-Solver step
         x, sigma_up = sa_solver_step(
             x=x,
             d_history=d_history,
@@ -396,7 +450,9 @@ def sample_akashic_solver(model, x, sigmas, extra_args=None, callback=None, disa
             noise_sampler=noise_sampler,
             order=order,
             ndb_strength=ndb_strength,
-            progress=progress
+            progress=progress,
+            eqvae_mode=eqvae_enabled,
+            eqvae_blur_sigma=eqvae_blur_sigma
         )
         
         # === ERROR HANDLING ===

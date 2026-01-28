@@ -111,11 +111,14 @@ class AdeptAncestralSampler:
 class AkashicSolverSampler:
     """
     AkashicSolver v2 [EXPERIMENTAL]: SA-Solver optimized for EQ-VAE models.
-    
+
     Combines SA-Solver multi-step integration with phase-aware adaptation and SMEA coherency.
-    Use external rescaleCFG (0.7) for EQ-VAE models.
+
+    EQ-VAE Mode:
+    - Off: Standard mode, use external rescaleCFG (0.7) for EQ-VAE models
+    - Balanced: Optimized for EQ-VAE's cleaner latent space, maintains sharpness
     """
-    
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -125,6 +128,7 @@ class AkashicSolverSampler:
                 "s_noise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "order": ("INT", {"default": 2, "min": 1, "max": 3}),
                 "adaptive_eta": ("BOOLEAN", {"default": True}),
+                "eqvae_mode": (["Off", "Balanced"], {"default": "Off"}),
             },
             "optional": {
                 "phase_strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
@@ -139,15 +143,15 @@ class AkashicSolverSampler:
     RETURN_TYPES = ("SAMPLER",)
     FUNCTION = "get_sampler"
     CATEGORY = "sampling/adept/samplers"
-    
-    def get_sampler(self, tau, eta, s_noise, order, adaptive_eta,
+
+    def get_sampler(self, tau, eta, s_noise, order, adaptive_eta, eqvae_mode,
                     phase_strength=0.5, smea_strength=0.0, ndb_strength=0.0,
                     use_detail_enhancement=False, detail_strength=0.05, detail_radius=0.5):
         settings = {
             'detail_enhancement_strength': detail_strength,
             'detail_separation_radius': detail_radius,
         }
-        
+
         sampler = KSAMPLER(
             sample_akashic_solver,
             extra_options={
@@ -161,6 +165,7 @@ class AkashicSolverSampler:
                 'ndb_strength': ndb_strength,
                 'use_detail_enhancement': use_detail_enhancement,
                 'settings': settings,
+                'eqvae_mode': eqvae_mode,
             }
         )
         return (sampler,)
