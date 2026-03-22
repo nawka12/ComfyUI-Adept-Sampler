@@ -409,6 +409,151 @@ def sa_solver_step(x, d_history, sigma, sigma_next, tau, s_noise=1.0, noise_samp
     return x_next, sigma_up
 
 
+def compute_adaptive_noise_scale(excess_samples, base_s_noise,
+                                  correction_power=0.5,
+                                  dampen_floor=0.80, boost_ceiling=1.15):
+    """
+    Adaptive noise scale using calibrated sigma-relative excess.
+
+    After collecting excess ratio samples during a warmup window inside the
+    texture phase, computes a single global correction factor based on the
+    median excess.
+
+    The excess ratio measures how much noise is slowing down convergence:
+        excess = (change_i / change_{i-1}) / (sigma_{i+1} / sigma_i)
+    When excess > 1.0, the model converges slower than sigma predicts.
+
+    Args:
+        excess_samples: List of excess ratio values from warmup window
+        base_s_noise: The effective s_noise to modulate
+        correction_power: How aggressively to correct (0.5 = square root)
+        dampen_floor: Minimum correction multiplier (default 0.80)
+        boost_ceiling: Maximum correction multiplier (default 1.15)
+
+    Returns:
+        Tuple of (correction_factor, median_excess)
+    """
+    if not excess_samples:
+        return 1.0, 0.0
+
+    sorted_samples = sorted(excess_samples)
+    median_excess = sorted_samples[len(sorted_samples) // 2]
+
+    if median_excess > 0:
+        correction = 1.0 / (median_excess ** correction_power)
+    else:
+        correction = 1.0
+
+    correction = max(dampen_floor, min(boost_ceiling, correction))
+    return correction, median_excess
+
+
+def compute_binned_corrections(excess_bins, global_correction,
+                                correction_power=0.5, dampen_floor=0.80,
+                                boost_ceiling=1.15, min_samples=3):
+    """
+    Compute per-phase corrections from binned excess samples.
+
+    Bins with fewer than min_samples fall back to the global correction.
+
+    Returns:
+        Dict mapping bin name to correction factor.
+    """
+    bin_corrections = {}
+    for bin_name, samples in excess_bins.items():
+        if len(samples) >= min_samples:
+            correction, _ = compute_adaptive_noise_scale(
+                samples, 1.0, correction_power, dampen_floor, boost_ceiling
+            )
+            bin_corrections[bin_name] = correction
+        else:
+            bin_corrections[bin_name] = global_correction
+    return bin_corrections
+
+
+def get_phase_correction(sigma_val, bin_corrections, global_correction):
+    """Look up the appropriate correction for the current sigma phase."""
+    if bin_corrections is None:
+        return global_correction
+    if sigma_val > 5.0:
+        return bin_corrections.get('structural', global_correction)
+    elif sigma_val > 0.5:
+        return bin_corrections.get('texture', global_correction)
+    else:
+        return bin_corrections.get('cleanup', global_correction)
+
+
+def adaptive_noise_step(denoised_raw, prev_denoised_raw, prev_change_norm,
+                        sigma, sigma_next, excess_samples, adaptive_correction,
+                        base_s_noise, step_idx, total_steps, warmup=5,
+                        binned_enabled=False, excess_bins=None,
+                        adaptive_bin_corrections=None):
+    """
+    Process one step of adaptive noise calibration.
+
+    Call after getting raw model output and before noise injection.
+    Handles warmup collection, calibration trigger, and correction application.
+
+    Returns:
+        (effective_s_noise, change_norm, adaptive_correction, should_restart,
+         adaptive_bin_corrections)
+    """
+    # Compute prediction change magnitude
+    if prev_denoised_raw is not None:
+        change_norm = torch.norm((denoised_raw - prev_denoised_raw).flatten(1), dim=1).mean().item()
+    else:
+        change_norm = None
+
+    effective_s_noise = base_s_noise
+    should_restart = False
+
+    if sigma_next > 0:
+        sigma_val = sigma.item() if torch.is_tensor(sigma) else float(sigma)
+        sigma_next_val = sigma_next.item() if torch.is_tensor(sigma_next) else float(sigma_next)
+        in_texture_phase = 0.5 < sigma_val < 5.0
+
+        if adaptive_correction is not None:
+            # Post-restart: apply correction
+            if binned_enabled and adaptive_bin_corrections is not None:
+                correction = get_phase_correction(sigma_val, adaptive_bin_corrections, adaptive_correction)
+                effective_s_noise *= correction
+            else:
+                effective_s_noise *= adaptive_correction
+        elif change_norm is not None and prev_change_norm is not None:
+            change_ratio = change_norm / (prev_change_norm + 1e-8)
+            sigma_ratio = sigma_next_val / (sigma_val + 1e-8)
+            excess = change_ratio / (sigma_ratio + 1e-8)
+
+            # Bin the excess sample by sigma phase
+            if binned_enabled and excess_bins is not None:
+                if sigma_val > 5.0:
+                    excess_bins['structural'].append(excess)
+                elif sigma_val > 0.5:
+                    excess_bins['texture'].append(excess)
+                else:
+                    excess_bins['cleanup'].append(excess)
+
+            # Texture-phase samples drive the warmup trigger
+            if in_texture_phase:
+                excess_samples.append(excess)
+
+                if len(excess_samples) >= warmup:
+                    adaptive_correction, median_excess = compute_adaptive_noise_scale(
+                        excess_samples, effective_s_noise
+                    )
+                    if binned_enabled and excess_bins is not None:
+                        adaptive_bin_corrections = compute_binned_corrections(
+                            excess_bins, adaptive_correction
+                        )
+                        bin_info = {k: f"{v:.3f}" for k, v in adaptive_bin_corrections.items()}
+                        print(f"   Adaptive Noise calibrated: global={adaptive_correction:.3f}, binned={bin_info}")
+                    else:
+                        print(f"   Adaptive Noise calibrated: correction={adaptive_correction:.3f}")
+                    should_restart = True
+
+    return effective_s_noise, change_norm, adaptive_correction, should_restart, adaptive_bin_corrections
+
+
 def get_ancestral_step(sigma, sigma_next, eta=1.):
     """Calculate ancestral step sizes."""
     sigma_up = min(sigma_next, eta * (sigma_next ** 2 * (sigma ** 2 - sigma_next ** 2) / sigma ** 2) ** 0.5)

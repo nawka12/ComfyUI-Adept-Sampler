@@ -79,21 +79,22 @@ class AdeptAncestralSampler:
                 "use_detail_enhancement": ("BOOLEAN", {"default": False}),
                 "detail_strength": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "detail_radius": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 2.0, "step": 0.1}),
+                "adaptive_noise": ("BOOLEAN", {"default": False}),
             }
         }
-    
+
     RETURN_TYPES = ("SAMPLER",)
     FUNCTION = "get_sampler"
     CATEGORY = "sampling/adept/samplers"
-    
+
     def get_sampler(self, eta, s_noise, adaptive_eta, phase_noise, enhanced_derivative,
-                    phase_strength=0.5, use_detail_enhancement=False, 
-                    detail_strength=0.05, detail_radius=0.5):
+                    phase_strength=0.5, use_detail_enhancement=False,
+                    detail_strength=0.05, detail_radius=0.5, adaptive_noise=False):
         settings = {
             'detail_enhancement_strength': detail_strength,
             'detail_separation_radius': detail_radius,
         }
-        
+
         sampler = KSAMPLER(
             sample_adept_ancestral_solver,
             extra_options={
@@ -105,6 +106,7 @@ class AdeptAncestralSampler:
                 'enhanced_derivative': enhanced_derivative,
                 'use_detail_enhancement': use_detail_enhancement,
                 'settings': settings,
+                'adaptive_noise': adaptive_noise,
             }
         )
         return (sampler,)
@@ -138,12 +140,13 @@ class AkashicSolverSampler:
                 "ndb_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "combat_cfg_drift": ("BOOLEAN", {"default": False}),
                 "combat_drift_intensity": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
+                "adaptive_noise": ("BOOLEAN", {"default": False}),
                 "use_detail_enhancement": ("BOOLEAN", {"default": False}),
                 "detail_strength": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "detail_radius": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 2.0, "step": 0.1}),
             }
         }
-    
+
     RETURN_TYPES = ("SAMPLER",)
     FUNCTION = "get_sampler"
     CATEGORY = "sampling/adept/samplers"
@@ -151,6 +154,7 @@ class AkashicSolverSampler:
     def get_sampler(self, tau, eta, s_noise, order, adaptive_eta, eqvae_mode,
                     phase_strength=0.5, smea_strength=0.0, ndb_strength=0.0,
                     combat_cfg_drift=False, combat_drift_intensity=0.5,
+                    adaptive_noise=False,
                     use_detail_enhancement=False, detail_strength=0.05, detail_radius=0.5):
         settings = {
             'detail_enhancement_strength': detail_strength,
@@ -173,6 +177,7 @@ class AkashicSolverSampler:
                 'eqvae_mode': eqvae_mode,
                 'combat_cfg_drift': combat_cfg_drift,
                 'combat_drift_intensity': combat_drift_intensity,
+                'adaptive_noise': adaptive_noise,
             }
         )
         return (sampler,)
@@ -188,7 +193,7 @@ class MirrorCorrectionEulerSampler:
     meaningful curvature estimate. Remaining steps are standard Euler Ancestral.
 
     Optional Smooth Phase Decay mode replaces the binary cutoff with a continuous
-    log-sigma weight modulated by gradient agreement for smoother transitions.
+    log-sigma weight for smoother transitions.
     """
 
     @classmethod
@@ -199,6 +204,9 @@ class MirrorCorrectionEulerSampler:
                 "s_noise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "correction_phase": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "smooth_phase": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "adaptive_noise": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -206,7 +214,7 @@ class MirrorCorrectionEulerSampler:
     FUNCTION = "get_sampler"
     CATEGORY = "sampling/adept/samplers"
 
-    def get_sampler(self, eta, s_noise, correction_phase, smooth_phase):
+    def get_sampler(self, eta, s_noise, correction_phase, smooth_phase, adaptive_noise=False):
         sampler = KSAMPLER(
             sample_mirror_correction_euler,
             extra_options={
@@ -214,6 +222,7 @@ class MirrorCorrectionEulerSampler:
                 's_noise': s_noise,
                 'correction_phase': correction_phase,
                 'smooth_phase': smooth_phase,
+                'adaptive_noise': adaptive_noise,
             }
         )
         return (sampler,)
